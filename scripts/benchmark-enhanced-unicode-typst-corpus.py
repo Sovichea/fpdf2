@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from fontTools.ttLib import TTFont
+from fontTools.varLib.instancer import instantiateVariableFont
 from pypdf import PdfReader
 
 from fpdf import FPDF
@@ -74,11 +76,37 @@ def load_typst_paragraphs(path: Path) -> tuple[str, list[str]]:
     return heading, paragraphs
 
 
-def font_paths(font_dir: Path) -> dict[str, Path]:
-    paths = {name: font_dir / filename for name, filename in FONT_FILES.items()}
-    missing = [str(path) for path in paths.values() if not path.is_file()]
+def font_paths(
+    font_dir: Path, output_dir: Path
+) -> dict[str, Path]:
+    variable_paths = {
+        name: font_dir / filename for name, filename in FONT_FILES.items()
+    }
+    missing = [str(path) for path in variable_paths.values() if not path.is_file()]
     if missing:
         raise SystemExit("Missing benchmark fonts:\n  " + "\n  ".join(missing))
+
+    # Enhanced Unicode currently creates synthetic glyf composites. A variable
+    # font would also require corresponding gvar entries for those new glyphs.
+    # For this apples-to-apples benchmark, instantiate every uploaded VF at its
+    # default axes and use the same resulting static TTF in both variants.
+    static_dir = output_dir / "static-fonts"
+    static_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for name, variable_path in variable_paths.items():
+        static_path = static_dir / variable_path.name.replace(
+            "-VF.ttf", "-default-static.ttf"
+        )
+        font = TTFont(variable_path, recalcTimestamp=False)
+        if "fvar" in font:
+            axes = {
+                axis.axisTag: axis.defaultValue for axis in font["fvar"].axes
+            }
+            instantiateVariableFont(
+                font, axes, inplace=True, static=True
+            )
+        font.save(static_path)
+        paths[name] = static_path
     return paths
 
 
@@ -228,8 +256,8 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
-    fonts = font_paths(args.font_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    fonts = font_paths(args.font_dir, args.output_dir)
     results: dict[str, Any] = {}
 
     print(

@@ -4,13 +4,21 @@ This benchmark tests whether the PDF-size behavior observed in Typsastra's
 Enhanced Unicode v0.3 architecture also appears when the same logical-unit
 model is adapted to fpdf2.
 
-The result is mixed and useful:
+The canonical Typsastra corpus shows that the current fragment-local fpdf2
+integration is approximately size-neutral rather than universally smaller:
 
-> The logical-unit representation can substantially reduce fpdf2 output for
-> some complex scripts as text volume grows, but the reduction is not universal.
-> fpdf2's existing shaped-glyph path is already compact for several scripts,
-> especially Arabic, so the same source-order logical representation can be
-> larger there.
+- English: +3.20%
+- Khmer: -1.30%
+- Arabic: -1.40%
+- Hindi: +4.79%
+- Mixed multilingual: +3.64%
+
+The result is therefore mixed and useful:
+
+> The logical-unit representation can reduce fpdf2 output when it removes
+> expensive shaped-text positioning, but the current fragment-local integration
+> does not reproduce Typsastra v0.3's large size reductions on the same
+> unique-paragraph corpus.
 
 This is an implementation and baseline effect, not a contradiction of the
 logical-unit architecture. The architecture guarantees semantic continuity.
@@ -34,15 +42,24 @@ The important implementation change in Typsastra v0.3 was retained text state
 plus positioned TJ batching. That eliminated the large v0.2 Latin and Arabic
 regressions while retaining source-order logical character codes.
 
-The fpdf2 benchmark below uses a different and much smaller workload, so the
-percentages must not be compared directly. It uses the exact text from
-Typsastra's unicode-selection fixture as the common corpus.
-
-Reference fixture:
+The primary fpdf2 benchmark now uses the same generated benchmark corpus as
+Typsastra. Unchanged copies are mirrored in the OpenPDF experiment:
 
 ~~~text
-tests/fixtures/enhanced-unicode/unicode-selection.typ
+pdf-toolbox/src/test/resources/benchmark/typst/
+    english.typ
+    khmer.typ
+    arabic.typ
+    hindi.typ
+    mixed.typ
 ~~~
+
+Each single-language fixture contains 480 deterministic sentences grouped into
+80 paragraphs. The mixed fixture interleaves all four languages for 1,920
+sentences.
+
+The earlier unicode-selection and repeated-payload measurements remain below as
+diagnostic microbenchmarks, not as the headline cross-project comparison.
 
 Reference Typsastra benchmark:
 
@@ -50,7 +67,86 @@ Reference Typsastra benchmark:
 docs/ENHANCED_UNICODE_ENGINE_BENCHMARKS_V0.3.0.md
 ~~~
 
-## Method
+## Canonical Typsastra corpus results
+
+The following results use the same 80-paragraph corpus and the corresponding
+Noto variable-font sources used by the OpenPDF benchmark mirror.
+
+The uploaded variable fonts were instantiated at their default axes into static
+TTFs before generation, and the same static instance was used for both the
+legacy and enhanced variants. This is necessary for the current experiment
+because synthetic logical glyphs are added to the TrueType glyf table but do
+not yet receive gvar variation records.
+
+| Corpus | Pages | Existing fpdf2 | Enhanced | Change |
+| --- | ---: | ---: | ---: | ---: |
+| English | 17 | 90,627 B | 93,529 B | **+3.20%** |
+| Khmer | 13 | 131,754 B | 130,037 B | **-1.30%** |
+| Arabic | 10 | 231,055 B | 227,816 B | **-1.40%** |
+| Hindi | 12 | 88,413 B | 92,650 B | **+4.79%** |
+| Mixed multilingual | 51 | 619,531 B | 642,085 B | **+3.64%** |
+
+Page counts are identical between the two fpdf2 variants for every corpus.
+They differ from Typst's page counts because fpdf2 and Typst use different
+layout and justification engines. The byte comparison above is therefore
+strictly between the two fpdf2 representations using identical fpdf2 layout.
+
+### Component breakdown
+
+| Corpus | Content delta | Font delta | /ToUnicode delta |
+| --- | ---: | ---: | ---: |
+| English | +2,021 B | +299 B | +424 B |
+| Khmer | **-5,691 B** | +1,443 B | +1,884 B |
+| Arabic | **-6,038 B** | +1,149 B | +1,163 B |
+| Hindi | +1,310 B | +1,007 B | +1,435 B |
+| Mixed | +9,458 B | +4,827 B | +6,046 B |
+
+Khmer and Arabic save enough page-content bytes to overcome the additional
+synthetic-glyph and /ToUnicode cost. English, Hindi, and mixed do not.
+
+### Text-operator evidence
+
+| Corpus | Existing Tm | Enhanced Tm | Existing TJ | Enhanced TJ | Existing Tj | Enhanced Tj |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| English | 9,286 | 9,164 | 0 | 0 | 9,928 | 9,725 |
+| Khmer | 17,987 | 16,078 | 0 | 0 | 17,757 | 15,850 |
+| Arabic | 31,979 | 29,468 | 0 | 81 | 29,180 | 26,516 |
+| Hindi | 9,433 | 9,212 | 0 | 0 | 9,862 | 9,561 |
+| Mixed | 68,663 | 66,349 | 0 | 575 | 78,913 | 73,818 |
+
+The enhanced path does reduce text matrices and text-show operations, but the
+canonical corpus makes the remaining Fragment boundary visible. Khmer still
+contains 15,850 Tj operations and no large TJ batches, while Typsastra v0.3
+reduced its equivalent Khmer benchmark to hundreds of text-state operations by
+retaining state across the complete logical run.
+
+The same effect appears in the mixed corpus. Enhanced Unicode removes 5,095 Tj
+operations but adds 575 TJ arrays while synthetic fonts and larger /ToUnicode
+maps add almost 11 KiB. The result is a 3.64% total increase.
+
+### Comparison with Typsastra v0.3
+
+| Corpus | Typsastra v0.3 vs stock | fpdf2 enhanced vs legacy |
+| --- | ---: | ---: |
+| English | +9.4% | +3.20% |
+| Khmer | **-86.1%** | **-1.30%** |
+| Arabic | **-12.8%** | **-1.40%** |
+| Hindi | **-71.3%** | +4.79% |
+| Mixed | **-30.7%** | +3.64% |
+
+This comparison should not be read as a direct producer-to-producer size
+ranking. Typst and fpdf2 have different layout engines and different
+conventional PDF text representations. It does show that the logical-unit
+abstraction alone is not sufficient to reproduce Typsastra's size reduction.
+The serializer must also receive sufficiently large source-owned logical runs
+to retain PDF text state and batch positioning effectively.
+
+For fpdf2 this supports the current engineering decision: keep the
+fragment-local implementation as the practical default, and treat a
+fragment-spanning LogicalRun pipeline as an optional size optimization if real
+workloads create enough demand.
+
+## Diagnostic microbenchmark method
 
 Two fpdf2 PDFs are generated from identical text and layout:
 
@@ -62,8 +158,9 @@ pdf.set_text_shaping(True, enhanced_unicode=False)
 pdf.set_text_shaping(True, enhanced_unicode=True)
 ~~~
 
-The benchmark uses A4 pages, 14 pt text, approximately 1.1 em line leading,
-and the exact labeled lines from the Typsastra fixture.
+The diagnostic microbenchmark uses A4 pages, 14 pt text, approximately 1.1 em
+line leading, and the exact labeled lines from the smaller Typsastra
+unicode-selection fixture.
 
 The following static Noto fonts were used:
 
@@ -460,8 +557,8 @@ micro-optimization inside _render_pdf_logical_units().
 
 ## Current recommendation and optional optimization path
 
-The current fragment-local implementation is the recommended compromise for
-fpdf2.
+The canonical corpus reinforces the earlier recommendation: the current
+fragment-local implementation is the recommended compromise for fpdf2.
 
 It preserves the core Enhanced Unicode representation at a small integration
 surface, keeps the existing layout/bidi/fallback pipeline intact, falls back
