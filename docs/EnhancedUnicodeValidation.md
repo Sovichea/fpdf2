@@ -248,6 +248,36 @@ The dedicated regression file was executed against the local port with the same 
 
 The forced-capacity extraction tests returned exact Khmer text and expected Poppler RTL text, and 180 DPI Hebrew, Arabic, and Khmer comparisons had zero differing pixels.
 
+## PDF-size benchmark
+
+The Typsastra unicode-selection fixture was also used to compare the existing
+fpdf2 shaped-glyph representation with the experimental logical-unit path.
+
+For the exact one-page fixture:
+
+~~~text
+existing fpdf2: 55,325 bytes
+enhanced:       57,997 bytes
+change:         +4.83%
+~~~
+
+The single fixture is too small for page-content savings to amortize the
+additional synthetic TrueType glyphs and /ToUnicode entries. Scaling tests
+show a different pattern by script. At 100 repetitions of the script payload,
+Khmer was 29% to 35% smaller, Thai 21% smaller, and Lao 18% smaller. Arabic
+was 9% larger, while Devanagari was approximately break-even.
+
+The benchmark also exposed an architectural difference from Typsastra v0.3:
+fpdf2 currently invokes logical serialization independently for each Fragment.
+Bidi, fallback-font, and script fragmentation can therefore reset text state
+before the logical writer sees the next piece of the source run. This both
+limits batching efficiency and prevents full source-order recovery for the
+mixed Arabic fixture.
+
+See [Enhanced Unicode PDF size benchmark](EnhancedUnicodeSizeBenchmark.md) for
+the complete methodology, per-script tables, operator counts, scaling results,
+and interpretation.
+
 ## Interpretation of results
 
 These experiments support the architectural claim that preserving source Unicode and shaped visual geometry together can solve extraction problems that are difficult to repair after a pipeline has collapsed text into independent glyph identities.
