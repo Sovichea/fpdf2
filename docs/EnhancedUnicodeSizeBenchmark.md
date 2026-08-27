@@ -458,12 +458,38 @@ table and still loses authored ordering across some bidi boundaries.
 The next fpdf2 architecture step should therefore be broader than another
 micro-optimization inside _render_pdf_logical_units().
 
-## Recommended next optimization
+## Current recommendation and optional optimization path
 
-The next experiment should move logical serialization state above individual
-Fragment objects.
+The current fragment-local implementation is the recommended compromise for
+fpdf2.
 
-A line or shaped paragraph should be able to provide a sequence resembling:
+It preserves the core Enhanced Unicode representation at a small integration
+surface, keeps the existing layout/bidi/fallback pipeline intact, falls back
+safely to the existing renderer for unsupported cases, and already produces
+substantial size reductions where fpdf2's conventional complex-script
+representation is expensive.
+
+The benchmark therefore does **not** imply that fpdf2 should redesign its text
+pipeline now.
+
+A broader fragment-spanning logical-run design should be treated as an
+alternative implementation only when real product requirements justify the
+additional architectural complexity.
+
+Such requirements could include:
+
+- PDF size becoming a material concern for workloads dominated by fragmented
+  shaped text;
+- cross-fragment semantic continuity becoming necessary for bidi or fallback
+  cases that cannot be represented correctly at the current Fragment boundary;
+- text-state efficiency becoming important enough that repeated Tf/Tm
+  transitions across fragments are measurable in real documents.
+
+If those requirements arise, fpdf2 could preserve source provenance through
+its existing bidi, fallback, and layout stages and construct a higher-level
+logical run spanning several rendering fragments.
+
+Conceptually:
 
 ~~~text
 LogicalRun {
@@ -473,7 +499,7 @@ LogicalRun {
 }
 ~~~
 
-and the PDF serializer should retain:
+The PDF serializer could then retain:
 
 ~~~text
 active logical font
@@ -481,20 +507,34 @@ current text matrix
 current logical/visual pen state
 ~~~
 
-across compatible fpdf2 fragments.
+across compatible fragments.
 
-That would allow:
+That alternative could enable:
 
-- removal of redundant Tf and Tm operations at fragment boundaries;
+- fewer redundant Tf and Tm operations at fragment boundaries;
 - larger TJ batches;
-- better combining-sequence compactness;
-- less fallback-font overhead;
-- a path toward preserving authored order across bidi fragmentation.
+- better compactness for combining and fallback-heavy text;
+- improved cross-fragment source-order preservation.
 
-A small local experiment that removed only redundant initial Tm resets already
-reduced the full-fixture regression from about +4.8% to about +4.1%, but it did
-not solve Arabic or the deeper fragment-order problem. The run-level boundary
-is therefore the more important target.
+This would be a broader pipeline change, not a requirement of the current
+Enhanced Unicode implementation.
+
+The practical decision rule is therefore:
+
+~~~text
+use the current fragment-local logical-unit implementation
+        ↓
+measure real-world semantic and size behavior
+        ↓
+only if size or cross-fragment semantics become material requirements
+        ↓
+consider source-provenance + fragment-spanning LogicalRun
+~~~
+
+A small local experiment that removed only redundant initial Tm resets reduced
+the full-fixture regression from about +4.8% to about +4.1%, which confirms that
+some additional batching opportunity exists. That result alone is not enough
+to justify redesigning the fpdf2 text pipeline.
 
 ## Reproducing the benchmark
 
@@ -527,18 +567,25 @@ Typsastra demonstrated that the v3 logical-unit model can produce very large
 size reductions when it replaces an expensive conventional complex-script PDF
 representation.
 
-fpdf2 confirms part of that result, especially for Khmer, Thai, and Lao, but
-also shows the boundary of the claim.
+fpdf2 confirms part of that result, especially for Khmer, Thai, and Lao, while
+also showing that the size benefit depends on the producer's existing text
+representation.
 
 The more general conclusion is:
 
 > PDF logical units change the scaling characteristics of text representation.
 > They can be substantially smaller when they collapse expensive per-glyph
 > positioning and semantic repair, but they can be larger when the producer's
-> existing visual-glyph path is already compact or when the logical serializer
-> is integrated too late in the pipeline.
+> existing visual-glyph path is already compact or when fragmentation limits
+> batching opportunities.
 
-For fpdf2, the benchmark points directly at the next architectural task:
-promote logical runs above Fragment-level serialization so source ownership and
-PDF text state survive the same boundaries that currently limit both Unicode
-correctness and size efficiency.
+For fpdf2, the current fragment-local implementation remains a good engineering
+compromise. It delivers the main Unicode-semantic benefit with a small,
+isolated change surface and already provides meaningful size reductions for
+several complex scripts.
+
+A fragment-spanning LogicalRun architecture should therefore be viewed as an
+optional future optimization, not as a prerequisite for Enhanced Unicode in
+fpdf2. It should be pursued only if real-world PDF size, cross-fragment
+semantics, or text-state efficiency creates sufficient demand to justify a
+broader pipeline change.
