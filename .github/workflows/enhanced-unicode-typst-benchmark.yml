@@ -1,0 +1,67 @@
+name: Enhanced Unicode Typst corpus benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - enhanced-unicode-v3
+    paths:
+      - ".github/workflows/enhanced-unicode-typst-benchmark.yml"
+      - "scripts/benchmark-enhanced-unicode-typst-corpus.py"
+      - "fpdf/**"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out fpdf2
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install fpdf2 benchmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Check out canonical Typsastra corpus
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            --branch pdf-logical-unit \
+            https://github.com/Sovichea/OpenPDF.git /tmp/OpenPDF
+          git -C /tmp/OpenPDF sparse-checkout set \
+            pdf-toolbox/src/test/resources/benchmark/typst
+
+      - name: Download Noto benchmark fonts
+        run: |
+          mkdir -p /tmp/unicode-fonts
+          curl -L --fail --retry 3 \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" \
+            -o /tmp/unicode-fonts/NotoSans-VF.ttf
+          curl -L --fail --retry 3 \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskhmer/NotoSansKhmer%5Bwdth%2Cwght%5D.ttf" \
+            -o /tmp/unicode-fonts/NotoSansKhmer-VF.ttf
+          curl -L --fail --retry 3 \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf" \
+            -o /tmp/unicode-fonts/NotoNaskhArabic-VF.ttf
+          curl -L --fail --retry 3 \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf" \
+            -o /tmp/unicode-fonts/NotoSansDevanagari-VF.ttf
+          ls -lh /tmp/unicode-fonts
+
+      - name: Run canonical corpus benchmark
+        run: |
+          python scripts/benchmark-enhanced-unicode-typst-corpus.py \
+            --corpus-dir /tmp/OpenPDF/pdf-toolbox/src/test/resources/benchmark/typst \
+            --font-dir /tmp/unicode-fonts \
+            --output-dir build/enhanced-unicode-typst-corpus
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: enhanced-unicode-typst-corpus
+          path: build/enhanced-unicode-typst-corpus/
