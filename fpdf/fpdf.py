@@ -800,6 +800,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
         direction: Optional[str | TextDirection] = None,
         script: Optional[str] = None,
         language: Optional[str] = None,
+        enhanced_unicode: bool = False,
     ) -> None:
         """
         Enable or disable text shaping engine when rendering text.
@@ -815,6 +816,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                 or "rtl" (right to left).
             script: a valid OpenType script tag like "arab" or "latn"
             language: a valid OpenType language tag like "eng" or "fra"
+            enhanced_unicode: use the experimental source-ordered logical-unit PDF encoder
         """
         if not use_shaping_engine:
             self.text_shaping = None
@@ -870,6 +872,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
             "language": language,
             "fragment_direction": None,
             "paragraph_direction": None,
+            "enhanced_unicode": enhanced_unicode,
         }
 
     @property

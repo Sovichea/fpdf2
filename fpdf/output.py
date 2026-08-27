@@ -1236,7 +1236,12 @@ class OutputProducer:
         pattern_objs_per_name: dict[str, "Pattern"],
     ) -> dict[int, PDFFont | PDFType3Font]:
         font_objs_per_index: dict[int, PDFFont | PDFType3Font] = {}
-        for font in sorted(self.fpdf.fonts.values(), key=lambda font: font.i):
+        fonts: list[CoreFont | TTFFont] = []
+        for font in self.fpdf.fonts.values():
+            fonts.append(font)
+            if isinstance(font, TTFFont):
+                fonts.extend(font.get_logical_shards())
+        for font in sorted(fonts, key=lambda font: font.i):
 
             # type 3 font
             if isinstance(font, TTFFont) and font.color_font:
@@ -1316,7 +1321,16 @@ class OutputProducer:
                 self._add_pdf_obj(core_font_obj, "fonts")
                 font_objs_per_index[font.i] = core_font_obj
             elif isinstance(font, TTFFont):
-                fontname = f"MPDFAA+{font.name}"
+                if font.logical_shard_index is not None:
+                    value = font.logical_shard_index
+                    chars = []
+                    for _ in range(5):
+                        chars.append(chr(ord("A") + value % 26))
+                        value //= 26
+                    subset_tag = "F" + "".join(reversed(chars))
+                else:
+                    subset_tag = "MPDFAA"
+                fontname = f"{subset_tag}+{font.name}"
 
                 # 1. get all glyphs in PDF
                 glyph_names = font.subset.get_all_glyph_names()
@@ -1813,11 +1827,22 @@ class OutputProducer:
                 page_obj.resources = resources_dict_obj
         else:
             for page_number, page_obj in enumerate(page_objs, start=1):
-                page_font_objs_per_index = {
-                    int(font_id): font_objs_per_index[int(font_id)]  # type: ignore[arg-type]
+                used_font_ids = {
+                    int(font_id)
                     for font_id in self.fpdf._resource_catalog.get_resources_per_page(
                         page_number, PDFResourceType.FONT
                     )
+                }
+                # Logical shards are selected while shaped text is rendered. Make
+                # generated shards available on every page that uses the parent font.
+                for font in self.fpdf.fonts.values():
+                    if isinstance(font, TTFFont) and font.i in used_font_ids:
+                        used_font_ids.update(
+                            shard.i for shard in font.get_logical_shards()
+                        )
+                page_font_objs_per_index = {
+                    font_id: font_objs_per_index[font_id]
+                    for font_id in used_font_ids
                 }
                 page_img_objs_per_index = {
                     int(img_id): img_objs_per_index[int(img_id)]  # type: ignore[arg-type]

@@ -365,6 +365,112 @@ class Fragment:
         self, pos_x: float, pos_y: float, h: float, word_spacing: float
     ) -> str:
         assert isinstance(self.font, TTFFont)
+        # Logical-unit encoding currently targets ordinary horizontal TrueType
+        # shaping. Preserve legacy behavior for spacing-sensitive and placeholder
+        # paths until those semantics are represented explicitly by logical units.
+        if (
+            self.text_shaping_parameters.get("enhanced_unicode", False)
+            and self.char_spacing == 0
+            and not word_spacing
+            and not isinstance(self, TotalPagesSubstitutionFragment)
+        ):
+            logical_units = self.font.shape_text_logical(
+                self.string, self.font_size_pt, self.text_shaping_parameters
+            )
+            if logical_units is not None:
+                return self._render_pdf_logical_units(
+                    pos_x, pos_y, h, logical_units
+                )
+        return self._render_with_text_shaping_legacy(
+            pos_x, pos_y, h, word_spacing
+        )
+
+    def _render_pdf_logical_units(
+        self,
+        pos_x: float,
+        pos_y: float,
+        h: float,
+        units: Sequence[dict[str, Any]],
+    ) -> str:
+        assert isinstance(self.font, TTFFont)
+        if not units:
+            return ""
+
+        def adjust_pos(pos: float) -> float:
+            return (
+                pos
+                * self.font.scale
+                * self.font_size_pt
+                * (self.font_stretching / 100)
+                / 1000
+                / self.k
+            )
+
+        result: list[str] = []
+        active_font_i = self.font.i
+        start = 0
+        while start < len(units):
+            font_i = int(units[start]["font_i"])
+            end = start + 1
+            while end < len(units) and int(units[end]["font_i"]) == font_i:
+                end += 1
+
+            if active_font_i != font_i:
+                result.append(f"/F{font_i} {self.font_size_pt:.2f} Tf ")
+                active_font_i = font_i
+
+            first = units[start]
+            offsetx = pos_x + adjust_pos(float(first["visual_x"]))
+            offsety = pos_y - adjust_pos(float(first["visual_y"]))
+            result.append(
+                f"1 0 0 1 {offsetx * self.k:.2f} {(h - offsety) * self.k:.2f} Tm "
+            )
+
+            chunks: list[str] = []
+            encoded = ""
+            has_adjustment = False
+            for index in range(start, end):
+                unit = units[index]
+                mapped_char = int(unit["mapped_char"])
+                encoded += self.font.escape_text(chr(mapped_char))
+                if index + 1 >= end:
+                    continue
+
+                next_unit = units[index + 1]
+                expected_x = float(unit["visual_x"]) + float(
+                    unit["advance_width"]
+                )
+                displacement = float(next_unit["visual_x"]) - expected_x
+                adjustment = round(-displacement * self.font.scale, 2)
+                reconstructed = -adjustment / self.font.scale
+                tolerance = 0.005 / self.font.scale + 1e-9
+                if abs(displacement - reconstructed) > tolerance:
+                    return self._render_with_text_shaping_legacy(
+                        pos_x, pos_y, h, 0
+                    )
+                if abs(adjustment) > 0.001:
+                    if encoded:
+                        chunks.append(f"({encoded})")
+                        encoded = ""
+                    chunks.append(f"{adjustment:.2f}")
+                    has_adjustment = True
+
+            if encoded:
+                chunks.append(f"({encoded})")
+            if has_adjustment:
+                result.append(f"[{' '.join(chunks)}] TJ ")
+            else:
+                result.append("".join(chunks) + " Tj ")
+            start = end
+
+        if active_font_i != self.font.i:
+            result.append(f"/F{self.font.i} {self.font_size_pt:.2f} Tf")
+        return "".join(result).rstrip()
+
+    def _render_with_text_shaping_legacy(
+        self, pos_x: float, pos_y: float, h: float, word_spacing: float
+    ) -> str:
+        assert isinstance(self.font, TTFFont)
         ret = ""
         text = ""
         space_mapped_code = self.font.subset.pick(ord(" "))
