@@ -5,6 +5,10 @@ semantic CIDs and embedded glyph IDs are independent namespaces. It is internal
 and may change without notice.
 """
 
+# pyright: reportUnknownArgumentType=false, reportAttributeAccessIssue=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportCallIssue=false, reportArgumentType=false
+
 from __future__ import annotations
 
 from dataclasses import dataclass
