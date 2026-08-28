@@ -246,7 +246,12 @@ def test_khmer_logical_units_preserve_baseline_pdfium_rendering():
     expected = _render_first_page(HERE / "multilingual_string.pdf")
 
     visual_agreement = _content_visual_agreement(actual, expected)
-    assert visual_agreement >= 0.99
+    white = Image.new("RGB", actual.size, "white")
+    actual_box = ImageChops.difference(actual, white).getbbox()
+    expected_box = ImageChops.difference(expected, white).getbbox()
+    assert visual_agreement >= 0.99, (
+        f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"
+    )
 
 
 def _styled_rtl_pdf(logical_units):
@@ -293,4 +298,9 @@ def test_styled_rtl_fragments_keep_semantic_order_and_visual_parity():
     actual = _render_first_page(logical)
     expected = _render_first_page(legacy)
     visual_agreement = _content_visual_agreement(actual, expected)
-    assert visual_agreement >= 0.99
+    white = Image.new("RGB", actual.size, "white")
+    actual_box = ImageChops.difference(actual, white).getbbox()
+    expected_box = ImageChops.difference(expected, white).getbbox()
+    assert visual_agreement >= 0.99, (
+        f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"
+    )
