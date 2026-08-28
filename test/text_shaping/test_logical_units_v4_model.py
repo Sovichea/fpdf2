@@ -79,7 +79,7 @@ def _content_visual_agreement(actual, expected):
 def test_logical_cid_encoder_accepts_full_two_byte_namespace():
     _pdf, font = _font()
 
-    assert font.escape_cid(0xD800).encode("latin-1") == b"\xD8\x00"
+    assert font.escape_cid(0xD800).encode("latin-1") == b"\xd8\x00"
     assert font.escape_cid(0x2829) == r"\(\)"
 
 
@@ -279,9 +279,9 @@ def test_khmer_logical_units_preserve_baseline_pdfium_rendering():
     white = Image.new("RGB", actual.size, "white")
     actual_box = ImageChops.difference(actual, white).getbbox()
     expected_box = ImageChops.difference(expected, white).getbbox()
-    assert visual_agreement >= 0.99, (
-        f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"
-    )
+    assert (
+        visual_agreement >= 0.99
+    ), f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"
 
 
 def _styled_rtl_pdf(logical_units):
@@ -331,6 +331,6 @@ def test_styled_rtl_fragments_keep_semantic_order_and_visual_parity():
     white = Image.new("RGB", actual.size, "white")
     actual_box = ImageChops.difference(actual, white).getbbox()
     expected_box = ImageChops.difference(expected, white).getbbox()
-    assert visual_agreement >= 0.99, (
-        f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"
-    )
+    assert (
+        visual_agreement >= 0.99
+    ), f"{visual_agreement=:.6f}, {actual_box=}, {expected_box=}"

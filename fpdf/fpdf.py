@@ -4033,16 +4033,14 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
         # currently all font sizes within a line are vertically aligned on the baseline.
         visual_fragments = text_line.get_ordered_fragments()
         semantic_fragments = list(text_line.fragments)
-        use_semantic_fragment_order = (
-            [id(frag) for frag in semantic_fragments]
-            != [id(frag) for frag in visual_fragments]
-            and all(
-                frag.is_ttf_font
-                and frag.text_shaping_parameters
-                and isinstance(frag.font, TTFFont)
-                and frag.font.logical_mapper is not None
-                for frag in semantic_fragments
-            )
+        use_semantic_fragment_order = [id(frag) for frag in semantic_fragments] != [
+            id(frag) for frag in visual_fragments
+        ] and all(
+            frag.is_ttf_font
+            and frag.text_shaping_parameters
+            and isinstance(frag.font, TTFFont)
+            and frag.font.logical_mapper is not None
+            for frag in semantic_fragments
         )
         fragments = (
             semantic_fragments if use_semantic_fragment_order else visual_fragments

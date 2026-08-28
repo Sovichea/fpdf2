@@ -407,9 +407,7 @@ def build_compact_logical_font(
             continue
 
         if not 0 <= visual.advance_width <= 0xFFFF:
-            raise FPDFException(
-                "Logical unit advance does not fit TrueType hmtx"
-            )
+            raise FPDFException("Logical unit advance does not fit TrueType hmtx")
 
         pen = TTGlyphPen(ttfont.getGlyphSet())
         for component in visual.components:
