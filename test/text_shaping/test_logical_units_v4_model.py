@@ -145,6 +145,8 @@ def test_multi_component_visual_builds_composite_glyph():
     assert len(glyph.components) == 2
     assert glyph.components[1].x == first.advance_width
     assert glyph.components[1].y == 20
+    synthetic_name = compact_font.getGlyphOrder()[compact.visual_gids[0]]
+    assert compact_font["hmtx"].metrics[synthetic_name][1] == glyph.xMin
 
 
 def test_semantic_and_compact_gid_capacity_shard_independently():
