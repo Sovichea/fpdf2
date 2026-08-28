@@ -382,11 +382,88 @@ class Fragment:
             )
 
         char_spacing = self.char_spacing * (self.font_stretching / 100) / self.k
-        for i, ti in enumerate(
+        shaped = list(
             self.font.shape_text(
                 self.string, self.font_size_pt, self.text_shaping_parameters
             )
-        ):
+        )
+        if shaped and shaped[0].get("logical_unit"):
+            spacing_before: dict[int, float] = {}
+            spacing = 0.0
+            for unit in sorted(shaped, key=lambda item: item["visual_order"]):
+                spacing_before[unit["visual_order"]] = spacing
+                spacing += char_spacing
+                if word_spacing and unit["is_space"]:
+                    spacing += word_spacing
+
+            current_resource = None
+            if not self.char_spacing and not word_spacing:
+                group_start = 0
+                while group_start < len(shaped):
+                    first = shaped[group_start]
+                    group_end = group_start + 1
+                    while (
+                        group_end < len(shaped)
+                        and shaped[group_end]["font_resource_id"]
+                        == first["font_resource_id"]
+                        and shaped[group_end]["visual_y"] == first["visual_y"]
+                    ):
+                        group_end += 1
+                    group = shaped[group_start:group_end]
+                    resource_id = first["font_resource_id"]
+                    if resource_id != current_resource:
+                        ret += f"/F{resource_id} {self.font_size_pt:.2f} Tf "
+                        current_resource = resource_id
+                    unit_x = pos_x + adjust_pos(first["visual_x"])
+                    unit_y = pos_y - adjust_pos(first["visual_y"])
+                    ret += (
+                        f"1 0 0 1 {unit_x * self.k:.2f} {(h - unit_y) * self.k:.2f} Tm "
+                    )
+                    tj_parts: list[str] = []
+                    for index, unit in enumerate(group):
+                        char = self.font.escape_text(chr(unit["mapped_char"]))
+                        tj_parts.append(f"({char})")
+                        if index + 1 < len(group):
+                            next_unit = group[index + 1]
+                            emitted_width = round(
+                                self.font.scale * unit["advance_width"] + 0.001
+                            )
+                            desired_advance = (
+                                next_unit["visual_x"] - unit["visual_x"]
+                            ) * self.font.scale
+                            adjustment = emitted_width - desired_advance
+                            tj_parts.append(f"{adjustment:.2f}")
+                    ret += f"[{' '.join(tj_parts)}] TJ "
+                    group_start = group_end
+            else:
+                for unit in shaped:
+                    resource_id = unit["font_resource_id"]
+                    if resource_id != current_resource:
+                        ret += f"/F{resource_id} {self.font_size_pt:.2f} Tf "
+                        current_resource = resource_id
+                    unit_x = (
+                        pos_x
+                        + adjust_pos(unit["visual_x"])
+                        + spacing_before[unit["visual_order"]]
+                    )
+                    unit_y = pos_y - adjust_pos(unit["visual_y"])
+                    char = self.font.escape_text(chr(unit["mapped_char"]))
+                    ret += (
+                        f"1 0 0 1 {unit_x * self.k:.2f} {(h - unit_y) * self.k:.2f} Tm "
+                        f"({char}) Tj "
+                    )
+
+            run_x_advance = shaped[0]["run_x_advance"]
+            run_y_advance = shaped[0]["run_y_advance"]
+            final_x = pos_x + adjust_pos(run_x_advance) + spacing
+            final_y = pos_y + adjust_pos(run_y_advance)
+            ret += (
+                f"1 0 0 1 {final_x * self.k:.2f} {(h - final_y) * self.k:.2f} Tm "
+                f"/F{self.font.i} {self.font_size_pt:.2f} Tf"
+            )
+            return ret
+
+        for i, ti in enumerate(shaped):
             if ti["mapped_char"] is None:  # Missing glyph
                 continue
             char = self.font.escape_text(chr(ti["mapped_char"]))
