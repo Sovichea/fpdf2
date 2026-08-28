@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qpdf poppler-utils
-          pip install -e ".[test]"
+          pip install -e ".[test,dev]"
       - name: Check formatting
         run: black --check fpdf/logical_units.py fpdf/fonts.py fpdf/fpdf.py fpdf/line_break.py fpdf/output.py test/text_shaping/test_logical_units_v4_model.py
       - name: Run logical unit v4 tests
