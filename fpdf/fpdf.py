@@ -4256,7 +4256,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                     sl.append(r_text)
 
                 frag_width = frag.get_width(
-                    initial_cs=i != 0
+                    initial_cs=visual_index != 0
                 ) + word_spacing * frag.characters.count(" ")
                 if frag.underline:
                     underlines.append(
