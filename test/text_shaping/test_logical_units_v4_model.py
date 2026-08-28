@@ -76,6 +76,13 @@ def _content_visual_agreement(actual, expected):
     return 1 - mean_error
 
 
+def test_logical_cid_encoder_accepts_full_two_byte_namespace():
+    _pdf, font = _font()
+
+    assert font.escape_cid(0xD800).encode("latin-1") == b"\xD8\x00"
+    assert font.escape_cid(0x2829) == r"\(\)"
+
+
 def test_distinct_semantics_share_one_visual_gid():
     _pdf, font = _font()
     mapper = LogicalFontMapper(font)
