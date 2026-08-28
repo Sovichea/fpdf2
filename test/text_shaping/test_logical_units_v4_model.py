@@ -172,6 +172,27 @@ def test_semantic_and_compact_gid_capacity_shard_independently():
     assert len(gid_mapper.shards) == 2
 
 
+def test_harfbuzz_first_cluster_retains_leading_unicode():
+    _pdf, font = _font()
+    mapper = LogicalFontMapper(font)
+    visual = _source_visual(font, "A")
+
+    infos = [SimpleNamespace(cluster=1, codepoint=visual.components[0].glyph_id)]
+    positions = [
+        SimpleNamespace(
+            x_advance=visual.advance_width,
+            y_advance=0,
+            x_offset=0,
+            y_offset=0,
+        )
+    ]
+
+    units = map_harfbuzz_logical_units("\u200bA", infos, positions, mapper)
+
+    assert len(units) == 1
+    assert mapper.shards[0].semantics[0].unicode == (0x200B, ord("A"))
+
+
 def test_harfbuzz_clusters_emit_semantic_order_with_visual_positions():
     _pdf, font = _font()
     mapper = LogicalFontMapper(font)
