@@ -247,3 +247,50 @@ def test_khmer_logical_units_preserve_baseline_pdfium_rendering():
 
     visual_agreement = _content_visual_agreement(actual, expected)
     assert visual_agreement >= 0.99
+
+
+def _styled_rtl_pdf(logical_units):
+    pdf = FPDF()
+    pdf.add_page()
+    font_path = HERE / "NotoNaskhArabic-Regular.ttf"
+    pdf.add_font(family="NotoRTL", fname=font_path)
+    pdf.add_font(family="NotoRTL", style="B", fname=font_path)
+    pdf.set_font("NotoRTL", size=30)
+    pdf.set_text_shaping(True)
+    if not logical_units:
+        for font in pdf.fonts.values():
+            if isinstance(font, TTFFont):
+                font.logical_mapper = None
+
+    pdf.multi_cell(
+        w=pdf.epw,
+        text="مثال **على اللغة** العربية",
+        markdown=True,
+    )
+    return bytes(pdf.output())
+
+
+def test_styled_rtl_fragments_keep_semantic_order_and_visual_parity():
+    logical = _styled_rtl_pdf(logical_units=True)
+    legacy = _styled_rtl_pdf(logical_units=False)
+
+    document = pdfium.PdfDocument(logical)
+    try:
+        page = document[0]
+        try:
+            text_page = page.get_textpage()
+            try:
+                extracted = text_page.get_text_bounded().strip()
+            finally:
+                text_page.close()
+        finally:
+            page.close()
+    finally:
+        document.close()
+
+    assert extracted == "مثال على اللغة العربية"
+
+    actual = _render_first_page(logical)
+    expected = _render_first_page(legacy)
+    visual_agreement = _content_visual_agreement(actual, expected)
+    assert visual_agreement >= 0.99
