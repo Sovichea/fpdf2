@@ -729,6 +729,11 @@ class TTFFont:
             return escape_parens(encoded.decode("latin-1", errors="ignore"))
         return escape_parens(text.encode("utf-16-be").decode("latin-1"))
 
+    def escape_cid(self, cid: int) -> str:
+        if not 0 <= cid <= 0xFFFF:
+            raise ValueError(f"CID must fit in two bytes: {cid}")
+        return escape_parens(cid.to_bytes(2, "big").decode("latin-1"))
+
     def get_text_width(
         self,
         text: str,
