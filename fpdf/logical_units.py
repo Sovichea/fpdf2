@@ -95,10 +95,11 @@ def map_harfbuzz_logical_units(
     clusters = sorted({int(info.cluster) for info in infos})
     cluster_unicode: dict[int, tuple[int, ...]] = {}
     for index, cluster in enumerate(clusters):
+        start = 0 if index == 0 else cluster
         end = clusters[index + 1] if index + 1 < len(clusters) else len(text)
-        if cluster < 0 or cluster > end or end > len(text):
+        if cluster < 0 or start > cluster or cluster > end or end > len(text):
             raise FPDFException("HarfBuzz returned an invalid text cluster")
-        cluster_unicode[cluster] = tuple(ord(char) for char in text[cluster:end])
+        cluster_unicode[cluster] = tuple(ord(char) for char in text[start:end])
 
     groups: dict[int, dict[str, Any]] = {}
     pen_x = 0
