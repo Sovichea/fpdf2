@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fontTools.ttLib import TTFont
-from PIL import ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageStat
 from pypdf import PdfReader
 import pypdfium2 as pdfium
 
@@ -53,6 +53,27 @@ def _render_first_page(pdf_input):
             page.close()
     finally:
         document.close()
+
+
+def _content_visual_agreement(actual, expected):
+    if actual.size != expected.size:
+        return 0.0
+    white = Image.new("RGB", actual.size, "white")
+    actual_box = ImageChops.difference(actual, white).getbbox()
+    expected_box = ImageChops.difference(expected, white).getbbox()
+    boxes = [box for box in (actual_box, expected_box) if box is not None]
+    if not boxes:
+        return 1.0
+
+    left = max(0, min(box[0] for box in boxes) - 4)
+    top = max(0, min(box[1] for box in boxes) - 4)
+    right = min(actual.width, max(box[2] for box in boxes) + 4)
+    bottom = min(actual.height, max(box[3] for box in boxes) + 4)
+    crop = (left, top, right, bottom)
+
+    diff = ImageChops.difference(actual.crop(crop), expected.crop(crop))
+    mean_error = sum(ImageStat.Stat(diff).mean) / (3 * 255)
+    return 1 - mean_error
 
 
 def test_distinct_semantics_share_one_visual_gid():
@@ -224,8 +245,5 @@ def test_khmer_logical_units_preserve_baseline_pdfium_rendering():
     actual = _render_first_page(output)
     expected = _render_first_page(HERE / "multilingual_string.pdf")
 
-    assert actual.size == expected.size
-    diff = ImageChops.difference(actual, expected)
-    mean_error = sum(ImageStat.Stat(diff).mean) / (3 * 255)
-    visual_agreement = 1 - mean_error
+    visual_agreement = _content_visual_agreement(actual, expected)
     assert visual_agreement >= 0.99
