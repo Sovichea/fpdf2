@@ -405,6 +405,11 @@ def build_compact_logical_font(
             visual_gids.append(compact_gid)
             continue
 
+        if not 0 <= visual.advance_width <= 0xFFFF:
+            raise FPDFException(
+                "Logical unit advance does not fit TrueType hmtx"
+            )
+
         pen = TTGlyphPen(ttfont.getGlyphSet())
         for component in visual.components:
             source_name = source_order[component.glyph_id]
@@ -415,8 +420,13 @@ def build_compact_logical_font(
         synthetic_name = f"fpdfLogical{len(visual_gids):05d}"
         while synthetic_name in ttfont.getGlyphOrder():
             synthetic_name += "_"
-        ttfont["glyf"][synthetic_name] = pen.glyph()
-        ttfont["hmtx"].metrics[synthetic_name] = (visual.advance_width, 0)
+        synthetic_glyph = pen.glyph()
+        ttfont["glyf"][synthetic_name] = synthetic_glyph
+        synthetic_glyph.recalcBounds(ttfont["glyf"])
+        ttfont["hmtx"].metrics[synthetic_name] = (
+            visual.advance_width,
+            synthetic_glyph.xMin,
+        )
         visual_gids.append(len(ttfont.getGlyphOrder()) - 1)
 
     output = BytesIO()
