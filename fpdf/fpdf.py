@@ -4219,6 +4219,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                     self.h,
                 )
                 if r_text:
+                    self._resource_catalog.index_stream_resources(r_text, self.page)
                     sl.append(r_text)
 
                 frag_width = frag.get_width(
