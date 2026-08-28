@@ -11,6 +11,7 @@ in non-backward-compatible ways.
 
 import logging
 import re
+from copy import deepcopy
 
 # pylint: disable=protected-access
 from abc import ABC, abstractmethod
@@ -29,6 +30,7 @@ from .enums import OutputIntentSubType, PageLabelStyle, PDFResourceType, Signatu
 from .errors import FPDFException
 from .font_type_3 import Type3Font
 from .fonts import CORE_FONTS, CoreFont, TTFFont
+from .logical_units import build_compact_logical_font, source_font_bytes
 from .image_datastructures import RasterImageInfo
 from .line_break import TotalPagesSubstitutionFragment
 from .outline import OutlineDictionary, OutlineItemDictionary, build_outline_objs
@@ -1229,6 +1231,104 @@ class OutputProducer:
                         sig_annotation_obj = annot_obj
         return sig_annotation_obj
 
+    def _add_logical_font_shards(
+        self,
+        font: TTFFont,
+        source_bytes: bytes,
+        font_objs_per_index: dict[int, PDFFont | PDFType3Font],
+    ) -> None:
+        mapper = font.logical_mapper
+        if mapper is None or not mapper.shards:
+            return
+
+        def format_code(unicode: int) -> str:
+            if unicode > 0xFFFF:
+                code_high = 0xD800 | (unicode - 0x10000) >> 10
+                code_low = 0xDC00 | (unicode & 0x3FF)
+                return f"{code_high:04X}{code_low:04X}"
+            return f"{unicode:04X}"
+
+        for shard in mapper.shards:
+            compact = build_compact_logical_font(source_bytes, shard)
+            fontname = f"MPDFAA+{font.name}Logical{shard.index}"
+
+            composite_font_obj = PDFFont(
+                subtype="Type0", base_font=fontname, encoding="Identity-H"
+            )
+            self._add_pdf_obj(composite_font_obj, "fonts")
+            font_objs_per_index[shard.resource_id] = composite_font_obj
+
+            cid_widths = {}
+            for cid, semantic in enumerate(shard.semantics, 1):
+                visual = shard.visuals[semantic.visual_index]
+                cid_widths[cid] = round(font.scale * visual.advance_width + 0.001)
+            cid_font_obj = PDFFont(
+                subtype="CIDFontType2",
+                base_font=fontname,
+                d_w=font.desc.missing_width,
+                w=_cid_font_widths(cid_widths),
+            )
+            self._add_pdf_obj(cid_font_obj, "fonts")
+            composite_font_obj.descendant_fonts = PDFArray([cid_font_obj])
+
+            bfChar = []
+            for cid, semantic in enumerate(shard.semantics, 1):
+                if not semantic.unicode:
+                    continue
+                bfChar.append(
+                    f'<{cid:04X}> <{"".join(format_code(code) for code in semantic.unicode)}>\n'
+                )
+            to_unicode_obj = PDFContentStream(
+                (
+                    "/CIDInit /ProcSet findresource begin\n"
+                    "12 dict begin\n"
+                    "begincmap\n"
+                    "/CIDSystemInfo\n"
+                    "<</Registry (Adobe)\n"
+                    "/Ordering (UCS)\n"
+                    "/Supplement 0\n"
+                    ">> def\n"
+                    "/CMapName /Adobe-Identity-UCS def\n"
+                    "/CMapType 2 def\n"
+                    "1 begincodespacerange\n"
+                    "<0000> <FFFF>\n"
+                    "endcodespacerange\n"
+                    f"{len(bfChar)} beginbfchar\n"
+                    f"{''.join(bfChar)}"
+                    "endbfchar\n"
+                    "endcmap\n"
+                    "CMapName currentdict /CMap defineresource pop\n"
+                    "end\n"
+                    "end"
+                ).encode("latin-1")
+            )
+            self._add_pdf_obj(to_unicode_obj, "fonts")
+            composite_font_obj.to_unicode = to_unicode_obj
+
+            cid_system_info_obj = CIDSystemInfo()
+            self._add_pdf_obj(cid_system_info_obj, "fonts")
+            cid_font_obj.c_i_d_system_info = cid_system_info_obj
+
+            font_descriptor_obj = deepcopy(font.desc)
+            font_descriptor_obj.font_name = Name(fontname)
+            self._add_pdf_obj(font_descriptor_obj, "fonts")
+            cid_font_obj.font_descriptor = font_descriptor_obj
+
+            cid_to_gid = bytearray((len(shard.semantics) + 1) * 2)
+            for cid, semantic in enumerate(shard.semantics, 1):
+                gid = compact.visual_gids[semantic.visual_index]
+                cid_to_gid[cid * 2] = gid >> 8
+                cid_to_gid[cid * 2 + 1] = gid & 0xFF
+            cid_to_gid_obj = PDFContentStream(
+                contents=bytes(cid_to_gid), compress=True
+            )
+            self._add_pdf_obj(cid_to_gid_obj, "fonts")
+            cid_font_obj.c_i_d_to_g_i_d_map = cid_to_gid_obj
+
+            font_file_cs_obj = PDFFontStream(contents=compact.font_bytes)
+            self._add_pdf_obj(font_file_cs_obj, "fonts")
+            font_descriptor_obj.font_file2 = font_file_cs_obj
+
     def _add_fonts(
         self,
         image_objects_per_index: dict[int, PDFXObject],
@@ -1317,6 +1417,12 @@ class OutputProducer:
                 font_objs_per_index[font.i] = core_font_obj
             elif isinstance(font, TTFFont):
                 fontname = f"MPDFAA+{font.name}"
+                if font.logical_mapper is not None and font.logical_mapper.shards:
+                    self._add_logical_font_shards(
+                        font,
+                        source_font_bytes(font.ttfont),
+                        font_objs_per_index,
+                    )
 
                 # 1. get all glyphs in PDF
                 glyph_names = font.subset.get_all_glyph_names()
