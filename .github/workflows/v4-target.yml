@@ -1,0 +1,27 @@
+name: v4-target
+
+on:
+  push:
+    branches:
+      - feat/logical-units-v4
+
+permissions:
+  contents: read
+
+jobs:
+  logical-units-v4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qpdf poppler-utils
+          pip install -e ".[test]"
+      - name: Check formatting
+        run: black --check fpdf/logical_units.py fpdf/fonts.py fpdf/fpdf.py fpdf/line_break.py fpdf/output.py test/text_shaping/test_logical_units_v4_model.py
+      - name: Run logical unit v4 tests
+        run: pytest -q test/text_shaping/test_logical_units_v4_model.py
