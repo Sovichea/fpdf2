@@ -86,7 +86,9 @@ def map_harfbuzz_logical_units(
     infos = list(glyph_infos)
     positions = list(glyph_positions)
     if len(infos) != len(positions):
-        raise FPDFException("HarfBuzz returned mismatched glyph info and position arrays")
+        raise FPDFException(
+            "HarfBuzz returned mismatched glyph info and position arrays"
+        )
     if not infos:
         return []
 
@@ -193,7 +195,9 @@ class CompactGlyphTracker:
             return self._dependency_cache[gid]
         glyph_order = self.ttfont.getGlyphOrder()
         if gid < 0 or gid >= len(glyph_order):
-            raise FPDFException(f"Logical unit references invalid source glyph ID {gid}")
+            raise FPDFException(
+                f"Logical unit references invalid source glyph ID {gid}"
+            )
         if visiting is None:
             visiting = set()
         if gid in visiting:
@@ -227,8 +231,7 @@ class CompactGlyphTracker:
     def plan(self, visual: VisualUnitKey) -> tuple[frozenset[int], bool]:
         for component in visual.components:
             if not (
-                -0x8000 <= component.x <= 0x7FFF
-                and -0x8000 <= component.y <= 0x7FFF
+                -0x8000 <= component.x <= 0x7FFF and -0x8000 <= component.y <= 0x7FFF
             ):
                 raise FPDFException(
                     "Logical TrueType component translation exceeds signed 16-bit range"
@@ -239,9 +242,7 @@ class CompactGlyphTracker:
         synthetic = not self._source_backed(visual)
         return frozenset(source_gids), synthetic
 
-    def can_commit(
-        self, visual: VisualUnitKey, capacity: int = MAX_GLYPHS
-    ) -> bool:
+    def can_commit(self, visual: VisualUnitKey, capacity: int = MAX_GLYPHS) -> bool:
         source_gids, synthetic = self.plan(visual)
         source_count = len(self.source_gids | set(source_gids))
         synthetic_count = len(self.synthetic_visuals)
@@ -333,17 +334,13 @@ class LogicalFontMapper:
             clone.shards.append(shard)
         return clone
 
-    def add(
-        self, unicode: tuple[int, ...], visual: VisualUnitKey
-    ) -> LogicalMappedUnit:
+    def add(self, unicode: tuple[int, ...], visual: VisualUnitKey) -> LogicalMappedUnit:
         key = SemanticUnitKey(unicode, visual)
         existing = self.semantic_records.get(key)
         if existing is not None:
             return existing
 
-        shard: Optional[LogicalFontShard] = (
-            self.shards[-1] if self.shards else None
-        )
+        shard: Optional[LogicalFontShard] = self.shards[-1] if self.shards else None
         if shard is None or not shard.plan_addition(
             visual, self.semantic_capacity, self.embedded_glyph_capacity
         ):

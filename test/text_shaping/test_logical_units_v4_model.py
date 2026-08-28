@@ -118,9 +118,7 @@ def test_multi_component_visual_builds_composite_glyph():
         source_font_bytes(font.ttfont), mapper.shards[0]
     )
     compact_font = TTFont(BytesIO(compact.font_bytes), recalcTimestamp=False)
-    glyph = compact_font["glyf"][
-        compact_font.getGlyphOrder()[compact.visual_gids[0]]
-    ]
+    glyph = compact_font["glyf"][compact_font.getGlyphOrder()[compact.visual_gids[0]]]
 
     assert glyph.isComposite()
     assert len(glyph.components) == 2

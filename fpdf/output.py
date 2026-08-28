@@ -1319,9 +1319,7 @@ class OutputProducer:
                 gid = compact.visual_gids[semantic.visual_index]
                 cid_to_gid[cid * 2] = gid >> 8
                 cid_to_gid[cid * 2 + 1] = gid & 0xFF
-            cid_to_gid_obj = PDFContentStream(
-                contents=bytes(cid_to_gid), compress=True
-            )
+            cid_to_gid_obj = PDFContentStream(contents=bytes(cid_to_gid), compress=True)
             self._add_pdf_obj(cid_to_gid_obj, "fonts")
             cid_font_obj.c_i_d_to_g_i_d_map = cid_to_gid_obj
 
