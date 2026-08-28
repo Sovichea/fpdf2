@@ -32,9 +32,9 @@ The enhanced pipeline keeps source and visual identity together:
 source Unicode
     -> HarfBuzz shaping
     -> source-ordered logical units
-    -> semantic + visual identity
-    -> logical CID
-    -> synthetic TrueType composite glyph
+    -> semantic CID + visual identity
+    -> compact source-backed or synthetic glyph
+    -> explicit /CIDToGIDMap
     -> exact /ToUnicode
     -> source-order Tj/TJ serialization
 ~~~
@@ -93,25 +93,29 @@ source text
 source text
     -> HarfBuzz
     -> logical-unit planning
-    -> semantic + visual key
-    -> synthetic logical Glyph
-    -> existing SubsetMap and /ToUnicode machinery
+    -> SemanticUnitKey + VisualUnitKey
+    -> compact logical font shard
+    -> explicit CIDToGIDMap + /ToUnicode
     -> logical-order PDF text
 ~~~
 
 ## Semantic and visual identity
 
-A logical identity is keyed by:
+Version 4 separates semantic and visual identity.
 
 ~~~text
-(
-    exact Unicode tuple,
-    synthetic advance width,
+VisualUnitKey = (
+    advance width,
     positioned component list
+)
+
+SemanticUnitKey = (
+    exact Unicode tuple,
+    VisualUnitKey
 )
 ~~~
 
-The positioned component list contains the source glyph IDs and their offsets inside the synthetic glyph.
+The positioned component list contains source glyph IDs and their offsets. Unicode never participates in visual deduplication, so different semantic CIDs can safely share one compact embedded GID.
 
 This gives the following rules:
 
@@ -123,37 +127,40 @@ different Unicode + same visual construction -> different logical identity
 
 A visual construction does not determine its Unicode semantics.
 
-## Synthetic TrueType glyphs
+## Compact source-backed and synthetic glyphs
 
-For a supported logical unit, fpdf2 creates a new TrueType composite glyph. Each already-shaped source glyph becomes a positioned component:
+Version 4 embeds only the source glyphs actually referenced by the document, their transitive TrueType composite dependencies, and one synthetic glyph per unique visual construction that cannot reuse a source glyph exactly.
 
-~~~text
-synthetic logical glyph
-    component source_gid_1 at x1,y1
-    component source_gid_2 at x2,y2
-    ...
-~~~
-
-The logical glyph is inserted into the existing subset map. The normal fpdf2 output code then provides both:
+An exact source glyph is reused when a visual unit has one component, zero x/y offsets, and a logical advance equal to the source glyph's nominal advance.
 
 ~~~text
-PDF code -> synthetic GID
-PDF code -> exact Unicode tuple through /ToUnicode
+one exact source component
+    -> compact source GID
+
+positioned / changed-advance / multi-component visual
+    -> compact synthetic GID
 ~~~
 
-### Left side bearing requirement
+Semantic CIDs and compact embedded GIDs are independent namespaces:
 
-A synthetic composite cannot safely use a hard-coded left side bearing of zero.
+~~~text
+PDF code = semantic CID
+semantic CID -> authoritative Unicode through /ToUnicode
+semantic CID -> compact GID through /CIDToGIDMap
+compact GID -> visual outline
+~~~
 
-TrueType derives horizontal phantom geometry from the glyph bounding box and left side bearing. A zero left side bearing can shift a composite whose xMin is not zero, which is especially visible for combining marks.
+A high source GID is densely remapped by fontTools and therefore does not consume the same numbered embedded GID. Capacity is tracked independently for the 65,535 semantic CIDs and the 65,535 compact embedded glyphs. Repeated semantic units reuse their CID and repeated visual constructions reuse their compact GID.
 
-The implementation recalculates the synthetic bounds and stores:
+### Synthetic left side bearing
+
+Synthetic composites recalculate their bounds and store:
 
 ~~~text
 leftSideBearing = synthetic.xMin
 ~~~
 
-This preserved visual positioning in Khmer and RTL rendering tests.
+This preserves TrueType phantom-point geometry for positioned marks and composites.
 
 ## v0.3.1 oversized-unit guard
 

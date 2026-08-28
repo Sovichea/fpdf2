@@ -432,7 +432,7 @@ class Fragment:
             for index in range(start, end):
                 unit = units[index]
                 mapped_char = int(unit["mapped_char"])
-                encoded += self.font.escape_text(chr(mapped_char))
+                encoded += self.font.escape_cid(mapped_char)
                 if index + 1 >= end:
                     continue
 

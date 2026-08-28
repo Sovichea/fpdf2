@@ -4015,7 +4015,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
         styled_txt_width = text_line.text_width
         if not styled_txt_width:
             for i, frag in enumerate(text_line.fragments):
-                unscaled_width = frag.get_width(initial_cs=i != 0)
+                unscaled_width = frag.get_width(initial_cs=visual_index != 0)
                 styled_txt_width += unscaled_width
 
         w = text_line.max_width
@@ -4034,7 +4034,21 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
 
         max_font_size: float = 0  # how much height we need to accommodate.
         # currently all font sizes within a line are vertically aligned on the baseline.
-        fragments = text_line.get_ordered_fragments()
+        visual_fragments = text_line.get_ordered_fragments()
+        semantic_fragments = list(text_line.fragments)
+        use_semantic_fragment_order = (
+            [id(frag) for frag in semantic_fragments]
+            != [id(frag) for frag in visual_fragments]
+            and all(
+                frag.is_ttf_font
+                and frag.text_shaping_parameters
+                and frag.text_shaping_parameters.get("enhanced_unicode", False)
+                for frag in semantic_fragments
+            )
+        )
+        fragments = (
+            semantic_fragments if use_semantic_fragment_order else visual_fragments
+        )
         for frag in fragments:
             if FloatTolerance.greater_than(frag.font_size, max_font_size):
                 max_font_size = frag.font_size
@@ -4099,6 +4113,19 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                 word_spacing = (
                     w - l_c_margin - r_c_margin - styled_txt_width
                 ) / text_line.number_of_spaces
+
+            visual_fragment_layout: dict[int, tuple[float, int]] = {}
+            visual_text_width = 0.0
+            if use_semantic_fragment_order:
+                for visual_index, visual_frag in enumerate(visual_fragments):
+                    visual_fragment_layout[id(visual_frag)] = (
+                        visual_text_width,
+                        visual_index,
+                    )
+                    visual_text_width += visual_frag.get_width(
+                        initial_cs=visual_index != 0
+                    ) + word_spacing * visual_frag.characters.count(" ")
+
             sl.append(
                 f"BT {(self.x + dx) * k:.2f} "
                 f"{(self.h - self.y - 0.5 * h - 0.3 * max_font_size) * k:.2f} Td"
@@ -4138,6 +4165,11 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                 ]
             ] = []
             for i, frag in enumerate(fragments):
+                if use_semantic_fragment_order:
+                    frag_s_width, visual_index = visual_fragment_layout[id(frag)]
+                else:
+                    frag_s_width, visual_index = s_width, i
+
                 if isinstance(frag, TotalPagesSubstitutionFragment):
                     self.pages[self.page].add_text_substitution(frag)
                 if frag.text_color != last_used_color:
@@ -4217,7 +4249,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                     frag_ws,
                     current_ws,
                     word_spacing,
-                    self.x + dx + s_width,
+                    self.x + dx + frag_s_width,
                     self.y + (0.5 * h + 0.3 * max_font_size),
                     self.h,
                 )
@@ -4230,7 +4262,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                 if frag.underline:
                     underlines.append(
                         (
-                            self.x + dx + s_width,
+                            self.x + dx + frag_s_width,
                             frag_width,
                             frag.font,
                             frag.font_size,
@@ -4240,7 +4272,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                 if frag.strikethrough:
                     strikethroughs.append(
                         (
-                            self.x + dx + s_width,
+                            self.x + dx + frag_s_width,
                             frag_width,
                             frag.font,
                             frag.font_size,
@@ -4249,7 +4281,7 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                     )
                 if frag.link:
                     self.link(
-                        x=self.x + dx + s_width,
+                        x=self.x + dx + frag_s_width,
                         y=self.y + (0.5 * h) - (0.5 * frag.font_size),
                         w=frag_width,
                         h=frag.font_size,
@@ -4257,7 +4289,11 @@ class FPDF(GraphicsStateMixin, TextRegionMixin):
                     )
                 if not frag.is_ttf_font:
                     current_ws = frag_ws
-                s_width += frag_width
+                if not use_semantic_fragment_order:
+                    s_width += frag_width
+
+            if use_semantic_fragment_order:
+                s_width = visual_text_width
 
             sl.append("ET")
 

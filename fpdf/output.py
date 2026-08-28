@@ -1332,6 +1332,9 @@ class OutputProducer:
                     subset_tag = "MPDFAA"
                 fontname = f"{subset_tag}+{font.name}"
 
+                if font.logical_shard_index is not None:
+                    font._prepare_logical_compact_font()
+
                 # 1. get all glyphs in PDF
                 glyph_names = font.subset.get_all_glyph_names()
 

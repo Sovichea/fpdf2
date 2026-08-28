@@ -32,6 +32,7 @@ from typing import (
     Union,
 )
 
+from fontTools import subset as ftsubset
 from fontTools import ttLib
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.varLib import instancer
@@ -353,6 +354,8 @@ class TTFFont:
         "_logical_shards",
         "_logical_source_font_data",
         "_logical_source_glyph_count",
+        "_logical_source_gids",
+        "_logical_dependency_cache",
         "_logical_shard_index",
     )
 
@@ -571,6 +574,8 @@ class TTFFont:
         self._logical_shards: list["TTFFont"] = []
         self._logical_source_font_data: Optional[bytes] = None
         self._logical_source_glyph_count: Optional[int] = None
+        self._logical_source_gids: set[int] = {0}
+        self._logical_dependency_cache: dict[int, frozenset[int]] = {}
         self._logical_shard_index: Optional[int] = None
         self.palette_index = palette_index if palette_index is not None else 0
         self.color_font = (
@@ -668,6 +673,8 @@ class TTFFont:
         copy._logical_shard_index = self._logical_shard_index
         copy._logical_source_font_data = self._logical_source_font_data
         copy._logical_source_glyph_count = self._logical_source_glyph_count
+        copy._logical_source_gids = self._logical_source_gids
+        copy._logical_dependency_cache = self._logical_dependency_cache
         copy._logical_glyphs = self._logical_glyphs
         copy._logical_records = self._logical_records
         copy._logical_shards = self._logical_shards
@@ -734,6 +741,11 @@ class TTFFont:
             encoded = text.encode("latin-1", errors="replace")
             return escape_parens(encoded.decode("latin-1", errors="ignore"))
         return escape_parens(text.encode("utf-16-be").decode("latin-1"))
+
+    def escape_cid(self, cid: int) -> str:
+        if not 0 <= cid <= 0xFFFF:
+            raise ValueError(f"CID must fit in two bytes: {cid}")
+        return escape_parens(cid.to_bytes(2, "big").decode("latin-1"))
 
     def get_text_width(
         self,
@@ -878,34 +890,97 @@ class TTFFont:
         shard.emphasis = self.emphasis
         shard.desc = deepcopy(self.desc)
         shard.subset = SubsetMap(shard)
+        # Logical CIDs use the complete 1..0xFFFF namespace. CID 0 remains
+        # reserved for .notdef, but unlike the ordinary subset map CID 0x20 is
+        # not reserved for a literal space.
+        shard.subset._char_id_per_glyph.clear()
+        shard.subset._reserved = [0]
+        shard.subset._next = 1
         shard.palette_index = self.palette_index
         shard.color_font = None
+        # v4: this map is keyed only by visual construction.
         shard._logical_glyphs = {}
+        # On a shard this is the semantic CID map. On the parent it remains the
+        # canonical semantic map across all shards.
         shard._logical_records = {}
         shard._logical_shards = []
         shard._logical_source_font_data = data
         shard._logical_source_glyph_count = self._logical_source_glyph_count
+        shard._logical_source_gids = {0}
+        shard._logical_dependency_cache = {}
         shard._logical_shard_index = shard_index
         self._logical_shards.append(shard)
         return shard
 
-    def _logical_font_remaining_capacity(self, font: "TTFFont") -> int:
-        glyph_capacity = 0x10000 - len(font.ttfont.getGlyphOrder())
-        cid_capacity = 0x10000 - len(font.subset)
-        return max(0, min(glyph_capacity, cid_capacity))
-
-    def _logical_new_shard_capacity(self) -> int:
-        self._ensure_logical_source_font_data()
-        assert self._logical_source_glyph_count is not None
-        return max(0, 0x10000 - self._logical_source_glyph_count)
+    @staticmethod
+    def _logical_visual_key(
+        advance_width: int,
+        components: Sequence[tuple[int, int, int]],
+    ) -> tuple[int, tuple[tuple[int, int, int], ...]]:
+        return (int(advance_width), tuple(components))
 
     @staticmethod
     def _logical_key(
         unicode: Sequence[int],
         advance_width: int,
         components: Sequence[tuple[int, int, int]],
-    ) -> tuple[tuple[int, ...], int, tuple[tuple[int, int, int], ...]]:
-        return (tuple(unicode), int(advance_width), tuple(components))
+    ) -> tuple[tuple[int, ...], tuple[int, tuple[tuple[int, int, int], ...]]]:
+        return (
+            tuple(unicode),
+            TTFFont._logical_visual_key(advance_width, components),
+        )
+
+    def _logical_dependencies(
+        self,
+        font: "TTFFont",
+        glyph_id: int,
+        visiting: Optional[set[int]] = None,
+    ) -> frozenset[int]:
+        cached = font._logical_dependency_cache.get(glyph_id)
+        if cached is not None:
+            return cached
+        glyph_order = font.ttfont.getGlyphOrder()
+        if glyph_id < 0 or glyph_id >= len(glyph_order):
+            raise ValueError(f"invalid logical source glyph ID: {glyph_id}")
+        if visiting is None:
+            visiting = set()
+        if glyph_id in visiting:
+            raise ValueError("cyclic TrueType composite glyph dependency")
+        visiting.add(glyph_id)
+        dependencies = {glyph_id}
+        glyph = font.ttfont["glyf"][glyph_order[glyph_id]]
+        if glyph.isComposite():
+            for component in glyph.components:
+                dependencies.update(
+                    self._logical_dependencies(
+                        font,
+                        font.ttfont.getGlyphID(component.glyphName),
+                        visiting,
+                    )
+                )
+        visiting.remove(glyph_id)
+        result = frozenset(dependencies)
+        font._logical_dependency_cache[glyph_id] = result
+        return result
+
+    @staticmethod
+    def _logical_is_synthetic(glyph: Glyph) -> bool:
+        return glyph.glyph_name.startswith(".fpdf2.logical.")
+
+    def _logical_embedded_glyph_count(self, font: "TTFFont") -> int:
+        synthetic_count = sum(
+            self._logical_is_synthetic(glyph)
+            for glyph in font._logical_glyphs.values()
+        )
+        return len(font._logical_source_gids) + synthetic_count
+
+    def _logical_font_remaining_capacity(self, font: "TTFFont") -> int:
+        semantic_capacity = 0xFFFF - len(font._logical_records)
+        embedded_capacity = 0xFFFF - self._logical_embedded_glyph_count(font)
+        return max(0, min(semantic_capacity, embedded_capacity))
+
+    def _logical_new_shard_capacity(self) -> int:
+        return 0xFFFF
 
     def _get_or_create_logical_glyph_on(
         self,
@@ -914,56 +989,85 @@ class TTFFont:
         advance_width: int,
         components: Sequence[tuple[int, int, int]],
     ) -> Optional[tuple["TTFFont", Any, int]]:
-        key = self._logical_key(unicode, advance_width, components)
-        glyph = target._logical_glyphs.get(key)
-        if glyph is not None:
-            mapped_char = target.subset.pick_glyph(glyph)
-            return (target, glyph, mapped_char) if mapped_char is not None else None
-        if self._logical_font_remaining_capacity(target) <= 0:
+        semantic_key = self._logical_key(unicode, advance_width, components)
+        existing = target._logical_records.get(semantic_key)
+        if existing is not None:
+            return existing
+        if len(target._logical_records) >= 0xFFFF:
             return None
 
-        glyph_set = target.ttfont.getGlyphSet()
-        pen = TTGlyphPen(glyph_set)
-        try:
-            for glyph_id, x, y in components:
-                pen.addComponent(
-                    target.ttfont.getGlyphName(glyph_id),
-                    (1, 0, 0, 1, int(x), int(y)),
-                )
-        except (KeyError, IndexError, ValueError):
-            return None
+        visual_key = self._logical_visual_key(advance_width, components)
+        prototype = target._logical_glyphs.get(visual_key)
+        if prototype is None:
+            if not components:
+                return None
 
-        serial = len(target._logical_glyphs)
-        glyph_name = f".fpdf2.logical.{serial}"
-        while glyph_name in target.ttfont["glyf"]:
-            serial += 1
-            glyph_name = f".fpdf2.logical.{serial}"
+            source_gids: set[int] = set()
+            try:
+                for glyph_id, x, y in components:
+                    if not (-0x8000 <= x <= 0x7FFF and -0x8000 <= y <= 0x7FFF):
+                        return None
+                    source_gids.update(
+                        self._logical_dependencies(target, int(glyph_id))
+                    )
+            except (KeyError, IndexError, ValueError):
+                return None
 
-        synthetic = pen.glyph()
-        target.ttfont["glyf"][glyph_name] = synthetic
-        # Preserve the composite coordinate origin. TrueType derives the
-        # horizontal phantom point from xMin - lsb, so lsb=0 can shift marks.
-        synthetic.recalcBounds(target.ttfont["glyf"])
-        lsb = getattr(synthetic, "xMin", 0)
-        target.ttfont["hmtx"][glyph_name] = (int(advance_width), int(lsb))
-        # TTFont caches its reverse glyph map after normal font initialization.
-        target.ttfont.setGlyphOrder(target.ttfont.getGlyphOrder())
-        glyph_id = target.ttfont.getGlyphID(glyph_name)
+            source_backed = False
+            glyph_id, x, y = components[0]
+            if len(components) == 1 and x == 0 and y == 0:
+                try:
+                    source_name = target.ttfont.getGlyphName(glyph_id)
+                    nominal_advance = int(
+                        target.ttfont["hmtx"].metrics[source_name][0]
+                    )
+                    source_backed = int(advance_width) == nominal_advance
+                except (KeyError, IndexError, ValueError):
+                    return None
+
+            added_source_gids = target._logical_source_gids | source_gids
+            current_synthetics = sum(
+                self._logical_is_synthetic(glyph)
+                for glyph in target._logical_glyphs.values()
+            )
+            added_synthetics = current_synthetics + (0 if source_backed else 1)
+            if len(added_source_gids) + added_synthetics > 0xFFFF:
+                return None
+
+            if source_backed:
+                glyph_name = source_name
+            else:
+                serial = len(target._logical_glyphs)
+                glyph_name = f".fpdf2.logical.{serial}"
+                existing_names = {
+                    glyph.glyph_name for glyph in target._logical_glyphs.values()
+                }
+                while glyph_name in existing_names:
+                    serial += 1
+                    glyph_name = f".fpdf2.logical.{serial}"
+
+            prototype = Glyph(
+                int(glyph_id),
+                (),
+                glyph_name,
+                round(target.scale * int(advance_width) + 0.001),
+            )
+            target._logical_glyphs[visual_key] = prototype
+            target._logical_source_gids = added_source_gids
+
+        mapped_char = len(target._logical_records) + 1
         glyph = Glyph(
-            glyph_id,
+            mapped_char,
             tuple(unicode),
-            glyph_name,
-            round(target.scale * advance_width),
+            prototype.glyph_name,
+            prototype.glyph_width,
         )
-        target._logical_glyphs[key] = glyph
-        mapped_char = target.subset.pick_glyph(glyph)
-        if mapped_char is None or mapped_char > 0xFFFF:
-            return None
+        target.subset._char_id_per_glyph[glyph] = mapped_char
+        target.subset._next = mapped_char + 1
 
         record = (target, glyph, mapped_char)
-        # Global reuse keeps the first semantic+visual identity canonical.
-        # Run affinity may duplicate an equivalent identity in another shard.
-        self._logical_records.setdefault(key, record)
+        target._logical_records[semantic_key] = record
+        self._logical_records.setdefault(semantic_key, record)
         return record
 
     def _get_or_create_logical_glyph(
@@ -972,19 +1076,106 @@ class TTFFont:
         advance_width: int,
         components: Sequence[tuple[int, int, int]],
     ) -> Optional[tuple["TTFFont", Any, int]]:
-        """Return a synthetic TrueType glyph for one authoritative logical unit."""
+        """Allocate semantic CID identity independently from compact visual GID identity."""
         self._ensure_logical_source_font_data()
         key = self._logical_key(unicode, advance_width, components)
         record = self._logical_records.get(key)
         if record is not None:
             return record
 
-        target = [self, *self._logical_shards][-1]
-        if self._logical_font_remaining_capacity(target) <= 0:
-            target = self._new_logical_shard()
+        target = self._logical_shards[-1] if self._logical_shards else None
+        if target is not None:
+            record = self._get_or_create_logical_glyph_on(
+                target, unicode, advance_width, components
+            )
+            if record is not None:
+                return record
+
+        target = self._new_logical_shard()
         return self._get_or_create_logical_glyph_on(
             target, unicode, advance_width, components
         )
+
+    def _prepare_logical_compact_font(self) -> None:
+        if self._logical_shard_index is None:
+            return
+        source_data = self._logical_source_font_data
+        if source_data is None:
+            raise ValueError("logical shard is missing its source font data")
+
+        ttfont = ttLib.TTFont(BytesIO(source_data), recalcTimestamp=False, lazy=False)
+        source_order = ttfont.getGlyphOrder()
+        required_names = [
+            source_order[glyph_id]
+            for glyph_id in sorted(self._logical_source_gids)
+        ]
+
+        options = ftsubset.Options(notdef_outline=True, recommended_glyphs=False)
+        options.drop_tables += [
+            "FFTM",
+            "GDEF",
+            "GPOS",
+            "GSUB",
+            "MATH",
+            "hdmx",
+            "meta",
+            "sbix",
+            "CBDT",
+            "CBLC",
+            "EBDT",
+            "EBLC",
+            "EBSC",
+            "SVG ",
+            "CPAL",
+            "COLR",
+        ]
+        subsetter = ftsubset.Subsetter(options)
+        subsetter.populate(glyphs=required_names)
+        subsetter.subset(ttfont)
+
+        for visual_key, prototype in self._logical_glyphs.items():
+            if not self._logical_is_synthetic(prototype):
+                continue
+            advance_width, components = visual_key
+            pen = TTGlyphPen(ttfont.getGlyphSet())
+            for glyph_id, x, y in components:
+                pen.addComponent(
+                    source_order[glyph_id],
+                    (1, 0, 0, 1, int(x), int(y)),
+                )
+            synthetic = pen.glyph()
+            glyph_name = prototype.glyph_name
+            ttfont["glyf"][glyph_name] = synthetic
+            glyph_order = ttfont.getGlyphOrder()
+            if glyph_name not in glyph_order:
+                ttfont.setGlyphOrder([*glyph_order, glyph_name])
+            synthetic.recalcBounds(ttfont["glyf"])
+            ttfont["hmtx"].metrics[glyph_name] = (
+                int(advance_width),
+                int(getattr(synthetic, "xMin", 0)),
+            )
+
+        glyf = ttfont["glyf"]
+        bounds = []
+        for glyph_name in ttfont.getGlyphOrder():
+            glyph = glyf[glyph_name]
+            if glyph.isComposite():
+                glyph.recalcBounds(glyf)
+            if hasattr(glyph, "xMin"):
+                bounds.append((glyph.xMin, glyph.yMin, glyph.xMax, glyph.yMax))
+        if bounds:
+            x_min = min(bound[0] for bound in bounds)
+            y_min = min(bound[1] for bound in bounds)
+            x_max = max(bound[2] for bound in bounds)
+            y_max = max(bound[3] for bound in bounds)
+            self.desc = deepcopy(self.desc)
+            self.desc.font_b_box = (
+                f"[{x_min * self.scale:.0f} {y_min * self.scale:.0f}"
+                f" {x_max * self.scale:.0f} {y_max * self.scale:.0f}]"
+            )
+
+        self.ttfont.close()
+        self.ttfont = ttfont
 
     def _plan_logical_text(
         self,
@@ -1097,59 +1288,6 @@ class TTFFont:
             )
         return plans
 
-    def _forecast_global_logical_fonts(
-        self, plans: Sequence[dict[str, Any]]
-    ) -> list[int]:
-        fonts = [self, *self._logical_shards]
-        current_index = len(fonts) - 1
-        remaining = [
-            self._logical_font_remaining_capacity(font) for font in fonts
-        ]
-        canonical = {
-            key: record[0].i for key, record in self._logical_records.items()
-        }
-        virtual_index = 0
-        sequence: list[int] = []
-
-        for plan in plans:
-            key = plan["key"]
-            font_i = canonical.get(key)
-            if font_i is None:
-                if remaining[current_index] <= 0:
-                    virtual_index += 1
-                    current_index += 1
-                    remaining.append(self._logical_new_shard_capacity())
-                if remaining[current_index] <= 0:
-                    return []
-                font_i = (
-                    fonts[current_index].i
-                    if current_index < len(fonts)
-                    else -(virtual_index + 1)
-                )
-                canonical[key] = font_i
-                remaining[current_index] -= 1
-            sequence.append(font_i)
-        return sequence
-
-    def _logical_run_affinity_target(
-        self, plans: Sequence[dict[str, Any]]
-    ) -> Optional["TTFFont"]:
-        unique_keys = list(dict.fromkeys(plan["key"] for plan in plans))
-        fonts = [self, *self._logical_shards]
-        current = fonts[-1]
-        candidates: list[tuple[int, bool, int, Any]] = []
-        for index, font in enumerate(fonts):
-            missing = sum(
-                key not in font._logical_glyphs for key in unique_keys
-            )
-            if missing <= self._logical_font_remaining_capacity(font):
-                candidates.append((missing, font is not current, -index, font))
-        if candidates:
-            return min(candidates, key=lambda item: item[:3])[3]
-        if len(unique_keys) <= self._logical_new_shard_capacity():
-            return self._new_logical_shard()
-        return None
-
     def _allocate_logical_plans(
         self,
         plans: Sequence[dict[str, Any]],
@@ -1194,36 +1332,15 @@ class TTFFont:
         """
         Shape text into source-ordered PDF logical units.
 
-        Exact source Unicode owns one positioned visual construction. Global
-        semantic+visual reuse is retained normally. If a source-ordered run moves
-        backward in visual x and normal sharding would split it across PDF fonts,
-        prefer a single existing/new shard for the complete run when capacity
-        allows. This keeps reordered/RTL runs inside one logical-order TJ stream.
-
-        None means this run is unsupported and the caller must use the legacy
-        per-glyph rendering path.
+        Version 4 keeps semantic CID identity independent from compact visual
+        glyph identity. Logical units remain in authoritative source order while
+        visual_x/visual_y and TJ adjustments preserve the shaped placement.
         """
         plans = self._plan_logical_text(
             text, font_size_pt, text_shaping_params
         )
         if plans is None or not plans:
             return plans
-
-        forecast = self._forecast_global_logical_fonts(plans)
-        would_split = any(
-            left != right for left, right in zip(forecast, forecast[1:])
-        )
-        visually_non_monotonic = any(
-            right["visual_x"] < left["visual_x"]
-            for left, right in zip(plans, plans[1:])
-        )
-        if would_split and visually_non_monotonic:
-            target = self._logical_run_affinity_target(plans)
-            if target is not None:
-                units = self._allocate_logical_plans(plans, target)
-                if units is not None:
-                    return units
-
         return self._allocate_logical_plans(plans)
 
     def shape_text(
