@@ -421,7 +421,7 @@ class Fragment:
                     )
                     tj_parts: list[str] = []
                     for index, unit in enumerate(group):
-                        char = self.font.escape_text(chr(unit["mapped_char"]))
+                        char = self.font.escape_cid(unit["mapped_char"])
                         tj_parts.append(f"({char})")
                         if index + 1 < len(group):
                             next_unit = group[index + 1]
@@ -447,7 +447,7 @@ class Fragment:
                         + spacing_before[unit["visual_order"]]
                     )
                     unit_y = pos_y - adjust_pos(unit["visual_y"])
-                    char = self.font.escape_text(chr(unit["mapped_char"]))
+                    char = self.font.escape_cid(unit["mapped_char"])
                     ret += (
                         f"1 0 0 1 {unit_x * self.k:.2f} {(h - unit_y) * self.k:.2f} Tm "
                         f"({char}) Tj "
