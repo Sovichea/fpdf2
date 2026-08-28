@@ -3,7 +3,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fontTools.ttLib import TTFont
+from PIL import ImageChops, ImageStat
 from pypdf import PdfReader
+import pypdfium2 as pdfium
 
 from fpdf import FPDF
 from fpdf.fonts import TTFFont
@@ -35,6 +37,22 @@ def _source_visual(font, char):
         advance_width=advance,
         components=(LogicalComponent(glyph_id, 0, 0),),
     )
+
+
+def _render_first_page(pdf_input):
+    document = pdfium.PdfDocument(pdf_input)
+    try:
+        page = document[0]
+        try:
+            bitmap = page.render(scale=2)
+            try:
+                return bitmap.to_pil().convert("RGB")
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        document.close()
 
 
 def test_distinct_semantics_share_one_visual_gid():
@@ -177,6 +195,13 @@ def test_khmer_shaping_embeds_logical_font_and_extracts_unicode():
     page = PdfReader(BytesIO(output)).pages[0]
     assert page.extract_text().strip() == text
 
+    document = pdfium.PdfDocument(output)
+    try:
+        pdfium_text = document[0].get_textpage().get_text_bounded().strip()
+    finally:
+        document.close()
+    assert pdfium_text == text
+
     fonts = page["/Resources"]["/Font"]
     logical_fonts = [
         font_ref.get_object()
@@ -187,3 +212,22 @@ def test_khmer_shaping_embeds_logical_font_and_extracts_unicode():
     descendant = logical_fonts[0]["/DescendantFonts"][0].get_object()
     assert descendant["/Subtype"] == "/CIDFontType2"
     assert "/CIDToGIDMap" in descendant
+
+
+def test_khmer_logical_units_preserve_baseline_pdfium_rendering():
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.add_font(family="KhmerOS", fname=HERE / "KhmerOS.ttf")
+    pdf.set_font("KhmerOS", size=30)
+    pdf.set_text_shaping(True)
+    pdf.cell(text="Khmer: សួស្តី ពិភពលោក")
+    output = bytes(pdf.output())
+
+    actual = _render_first_page(output)
+    expected = _render_first_page(HERE / "multilingual_string.pdf")
+
+    assert actual.size == expected.size
+    diff = ImageChops.difference(actual, expected)
+    mean_error = sum(ImageStat.Stat(diff).mean) / (3 * 255)
+    visual_agreement = 1 - mean_error
+    assert visual_agreement >= 0.99
