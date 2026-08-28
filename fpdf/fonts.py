@@ -61,6 +61,7 @@ from .drawing_primitives import (
 )
 from .enums import Align, FontDescriptorFlags, TextEmphasis
 from .font_type_3 import get_color_font_object
+from .logical_units import LogicalFontMapper, map_harfbuzz_logical_units
 from .syntax import Name, PDFObject
 from .util import escape_parens
 
@@ -348,6 +349,7 @@ class TTFFont:
         "is_symbol",
         "cff_ros",
         "collection_font_number",
+        "logical_mapper",
     )
 
     def __init__(
@@ -566,6 +568,11 @@ class TTFFont:
             if fpdf.render_color_fonts
             else None
         )
+        self.logical_mapper = (
+            LogicalFontMapper(self)
+            if "glyf" in self.ttfont and self.color_font is None
+            else None
+        )
 
     # pylint: disable=no-member
     @property
@@ -666,6 +673,11 @@ class TTFFont:
         copy._hbfont = self._hbfont
         copy.color_font = self.color_font
         copy.palette_index = self.palette_index
+        copy.logical_mapper = (
+            self.logical_mapper.clone_for_font(copy)
+            if self.logical_mapper is not None
+            else None
+        )
         return copy
 
     def close(self) -> None:
@@ -831,6 +843,25 @@ class TTFFont:
             text, font_size_pt, text_shaping_params
         )
         text_info = []
+
+        if self.logical_mapper is not None:
+            return [
+                {
+                    "mapped_char": unit.mapped.cid,
+                    "font_resource_id": unit.mapped.resource_id,
+                    "visual_x": unit.visual_x,
+                    "visual_y": unit.visual_y,
+                    "visual_order": unit.visual_order,
+                    "advance_width": unit.advance_width,
+                    "is_space": unit.is_space,
+                    "run_x_advance": unit.run_x_advance,
+                    "run_y_advance": unit.run_y_advance,
+                    "logical_unit": True,
+                }
+                for unit in map_harfbuzz_logical_units(
+                    text, glyph_infos, glyph_positions, self.logical_mapper
+                )
+            ]
 
         # Find cluster gaps
         # Ex: text = "ABCD"
